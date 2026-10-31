@@ -99,14 +99,14 @@ footer{padding:18px 24px 24px;font-size:12px;color:var(--muted)}
   <div class="col">
     <section class="panel">
       <h2>Field map <span class="tag" style="background:var(--muted)" id="mapTag">0 / 0 nodes online</span></h2>
-      <p class="hint">Corner nodes watch the sides with a profile (outer) + gait (inner) beam pair. Centre: master with the central horn. Tap a node to configure it.</p>
+      <p class="hint">Sensor nodes (filled circles) watch the sides with a profile (outer) + gait (inner) beam pair and sound their own horn. Hollow corners carry only IR transmitters. <span id="mapMaster">The master is portable — it travels with you.</span> Tap a node to configure it.</p>
       <svg id="map" viewBox="-14 -14 128 128" width="100%" style="max-height:470px" role="img" aria-label="Field map with corner nodes and boundaries"></svg>
-      <div class="row muted"><span><span class="lamp"></span> side clear</span><span><span class="lamp blk"></span> beam blocked</span><span>- - - not watched</span><span style="color:var(--org)">orange: watched twice</span></div>
+      <div class="row muted"><span><span class="lamp"></span> side clear</span><span><span class="lamp blk"></span> beam blocked</span><span>- - - not watched</span><span style="color:var(--org)">orange: watched twice</span><span>○ transmitter-only corner</span></div>
     </section>
 
     <section class="panel">
-      <h2>Corner nodes</h2>
-      <p class="hint">Live from each node's heartbeat (every 10 s). Commands reach a node on its next contact.</p>
+      <h2>Nodes</h2>
+      <p class="hint">Live from each sensor node's heartbeat (every 10 s while the master is in range). Commands reach a node on its next contact. A node out of range keeps guarding and stores its crossings until the master comes back.</p>
       <div class="nodes" id="nodes"></div>
     </section>
 
@@ -132,7 +132,7 @@ footer{padding:18px 24px 24px;font-size:12px;color:var(--muted)}
       <div class="row">
         <button class="sbtn" data-to="all" data-c="arm">Arm all</button>
         <button class="sbtn" data-to="all" data-c="disarm">Disarm all</button>
-        <button class="sbtn" data-to="master" data-c="horn:2000">Test central horn</button>
+        <button class="sbtn" data-to="master" data-c="horn:1500">Test master buzzer</button>
         <button class="sbtn" id="cfgBtn">Configure field</button>
       </div>
       <div class="grid3" style="margin-top:8px">
@@ -190,7 +190,7 @@ footer{padding:18px 24px 24px;font-size:12px;color:var(--muted)}
     </table></div>
   </div>
 </section>
-<footer>NilGai Guard v2 · corner slaves → (Bluetooth) → master → MQTT → this page · Google Sheets keeps the training data · offline: Wi-Fi “NilGaiGuard-Master” → http://192.168.4.1</footer>
+<footer>NilGai Guard v2 · sensor nodes A, C → (ESP-NOW) → portable master → MQTT → this page · Google Sheets keeps the training data · offline: Wi-Fi “NilGaiGuard-Master” → http://192.168.4.1</footer>
 
 <dialog id="dSet">
   <h3>Settings (this browser only)</h3>
@@ -212,15 +212,18 @@ footer{padding:18px 24px 24px;font-size:12px;color:var(--muted)}
   <h3>Configure field</h3>
   <label>Farm name<br><input id="fFarm" style="width:100%"></label>
   <div class="row"><label>Corners in perimeter order (clockwise)<br><input id="fOrder" style="width:260px" placeholder="A,B,C,D"></label></div>
-  <p class="muted">Add a new corner by adding its letter here (e.g. A,B,E,C,D) and flash a slave with NODE_ID "E". Sides are the pairs of neighbours: AB, BE, EC …</p>
+  <div class="row"><label>Transmitter-only corners (no controller)<br><input id="fPas" style="width:260px" placeholder="B,D"></label></div>
+  <p class="muted">Add a new corner by adding its letter (e.g. A,B,E,C,D) and flash a slave with NODE_ID "E". Sides are the pairs of neighbours: AB, BE, EC … Every side needs a sensor node at one of its two ends.</p>
   <div class="chbox"><b>Master</b>
-    <div class="row"><label><input type="checkbox" id="fCH"> Central horn on NilGai entry</label></div>
-    <div class="row"><label><input type="checkbox" id="fNH"> Also horn at the other end of the breached side</label></div>
-    <div class="row"><label>Central horn length <input type="number" id="fHS" min="1" max="60"> s</label></div>
+    <div class="row"><label><input type="checkbox" id="fPort"> Master is portable (carried by a person)</label></div>
+    <div class="row"><label><input type="checkbox" id="fCH"> Master buzzer / central horn on NilGai entry</label></div>
+    <div class="row"><label><input type="checkbox" id="fNH"> Also horn at the other end of the breached side (if it has a node)</label></div>
+    <div class="row"><label><input type="checkbox" id="fAH"> Also sound every other node's horn</label></div>
+    <div class="row"><label>Horn length for those <input type="number" id="fHS" min="1" max="60"> s</label></div>
     <div class="row"><label><input type="checkbox" id="fTG"> Telegram alerts</label><label><input type="checkbox" id="fTH"> also for people</label></div>
   </div>
   <div class="row"><button class="sbtn p" id="fSave">Save</button><button class="sbtn" id="fAuto">Auto-assign sides</button><button class="sbtn" onclick="dField.close()">Cancel</button></div>
-  <p class="muted">Auto-assign: each corner watches the side to its clockwise neighbour on channel 1.</p>
+  <p class="muted">Auto-assign: each side is watched by the sensor node at its clockwise start, or at its other end when the start is a transmitter-only corner (A → AB + DA, C → BC + CD).</p>
 </dialog>
 <div class="toast" id="toast"></div>
 
@@ -278,11 +281,14 @@ const masterOnline=()=>S.demo||(S.state&&Date.now()-S.lastState<12000);
 const order=()=>(S.cfg&&S.cfg.order)||[];
 const ncfg=id=>(S.cfg&&S.cfg.nodes&&S.cfg.nodes[id])||null;
 const hbOf=id=>S.nodes[id]&&S.nodes[id].hb;
+const isPas=id=>{const c=ncfg(id);return !!(c&&c.passive)};
+const active=()=>order().filter(id=>!isPas(id));
+const portable=()=>!S.cfg||!S.cfg.master||S.cfg.master.portable!==0;
 const nsum=id=>(S.state&&S.state.nodes&&S.state.nodes[id])||{};
 const sideKey=(a,b)=>[a,b].sort().join('');
 function sides(){const o=order(),out=[];if(o.length<2)return out;for(let i=0;i<o.length;i++){const a=o[i],b=o[(i+1)%o.length];if(o.length===2&&i===1)break;out.push({a,b,name:a+b})}return out}
 function watchers(name){const k=sideKey(name[0],name[1]),w=[];
-  for(const id of order()){const c=ncfg(id);if(!c||!c.ch)continue;c.ch.forEach((ch,i)=>{if(ch.en&&ch.b&&ch.b.length===2&&sideKey(ch.b[0],ch.b[1])===k)w.push({id,ch:i})})}return w}
+  for(const id of order()){const c=ncfg(id);if(!c||!c.ch||c.passive)continue;c.ch.forEach((ch,i)=>{if(ch.en&&ch.b&&ch.b.length===2&&sideKey(ch.b[0],ch.b[1])===k)w.push({id,ch:i})})}return w}
 function beamNow(name){let st=0;for(const w of watchers(name)){const h=hbOf(w.id);if(!h||!nsum(w.id).online)continue;const b=h.beams[w.ch];if(b){st=Math.max(st,(b.p||b.g)?2:1)}}return st}
 function fmtTime(e){if(e.time)return e.time.slice(11)+(isToday(e)?'':' '+e.time.slice(5,10));const d=new Date((e.rx||Date.now()/1000)*1000);return d.toLocaleTimeString()}
 function isToday(e){if(!e.epoch)return true;const d=new Date(e.epoch*1000),n=new Date();return d.toDateString()===n.toDateString()}
@@ -297,7 +303,8 @@ function addEvent(e,live){
   S.byUid[e.uid]=e;S.events.push(e);
   S.events.sort((a,b)=>(b.epoch||b.rx||0)-(a.epoch||a.rx||0));
   if(S.events.length>2000){const x=S.events.pop();delete S.byUid[x.uid]}
-  if(live){
+  if(live&&e.late){renderSig(e);toast(`Delayed report from node ${e.id}: ${CLSN[e.cls]||e.cls} at ${e.b} (${fmtTime(e)})`)}
+  if(live&&!e.late){
     renderSig(e);banner(e);S.animB={name:e.b,t0:performance.now(),dir:e.dir,cls:e.cls,id:e.id};
     if(e.cls==='NILGAI'&&e.status==='ALERT')notify(`NilGai entering at side ${e.b}`,`Node ${e.id} · ${Math.round(e.p*100)}% · ${e.action}`);
   }
@@ -315,11 +322,11 @@ function bannerIdle(){
   if(Date.now()<S.banner)return;const a=$('alert');a.classList.remove('hot');
   if(!masterOnline()){a.style.background='#7C8B81';$('aBig').textContent='Waiting for the master node…';$('aSub').textContent=S.client&&S.client.connected?'Cloud connected. Is the master powered and on the hotspot?':'Connecting to the cloud…';return}
   const st=S.state||{};
-  if(st.horn){a.style.background='#D62839';$('aBig').textContent='Central horn sounding';$('aSub').textContent='Press Stop all horns to silence.';return}
-  const off=order().filter(id=>!nsum(id).online);
+  if(st.horn){a.style.background='#D62839';$('aBig').textContent=portable()?'Master buzzer sounding':'Central horn sounding';$('aSub').textContent='Press Stop all horns to silence.';return}
+  const off=active().filter(id=>!nsum(id).online);
   if(!st.armed){a.style.background='#F07D1A';$('aBig').textContent='System disarmed';$('aSub').textContent='Crossings are logged but no horn sounds.';return}
-  if(off.length){a.style.background='#F07D1A';$('aBig').textContent=`${off.length} corner node${off.length>1?'s':''} offline: ${off.join(', ')}`;$('aSub').textContent='Their sides are not watched. Check power and Bluetooth range.';return}
-  a.style.background='#3E9B5F';$('aBig').textContent='Field is quiet';$('aSub').textContent=`All ${order().length} corner nodes online · every watched side clear.`;
+  if(off.length){a.style.background='#F07D1A';$('aBig').textContent=`Node${off.length>1?'s':''} ${off.join(', ')} out of the master's range`;$('aSub').textContent=portable()?'They keep guarding and save every crossing in flash. Walk the master closer to collect them (or check the node battery).':'Check power and radio range.';return}
+  a.style.background='#3E9B5F';$('aBig').textContent='Field is quiet';$('aSub').textContent=`All ${active().length} sensor nodes in range · every watched side clear.`;
 }
 function notify(t,b){try{if(window.Notification&&Notification.permission==='granted')new Notification(t,{body:b})}catch(e){}}
 
@@ -350,15 +357,19 @@ function drawMap(){
     }
   }
   const horn=S.state&&S.state.horn;
-  if(horn)[8,12,16].forEach(r=>el('circle',{cx,cy,r,fill:'none',stroke:'#D62839','stroke-width':.8,'stroke-opacity':.6},s));
-  el('circle',{cx,cy,r:5.5,fill:horn?'#D62839':'#1F4A2E',stroke:'#fff','stroke-width':1.2},s);
-  el('text',{x:cx,y:cy+1.8,'text-anchor':'middle','font-size':4.6,'font-weight':800,fill:'#fff'},s,'M');
+  if(!portable()){
+    if(horn)[8,12,16].forEach(r=>el('circle',{cx,cy,r,fill:'none',stroke:'#D62839','stroke-width':.8,'stroke-opacity':.6},s));
+    el('circle',{cx,cy,r:5.5,fill:horn?'#D62839':'#1F4A2E',stroke:'#fff','stroke-width':1.2},s);
+    el('text',{x:cx,y:cy+1.8,'text-anchor':'middle','font-size':4.6,'font-weight':800,fill:'#fff'},s,'M');}
+  $('mapMaster').textContent=portable()?'The master is portable — it travels with you.':'Centre: master with the central horn.';
   for(const id of o){const p=P(id),on=nsum(id).online,h=hbOf(id);
     const g=el('g',{style:'cursor:pointer'},s);g.addEventListener('click',()=>editNode(id));
+    if(isPas(id)){el('circle',{cx:p.x,cy:p.y,r:4.6,fill:'#fff',stroke:'#5E6E63','stroke-width':1.2},g);
+      el('text',{x:p.x,y:p.y+1.8,'text-anchor':'middle','font-size':5,'font-weight':800,fill:'#5E6E63'},g,id);continue}
     if(h&&h.horn&&on)[7,10].forEach(r=>el('circle',{cx:p.x,cy:p.y,r,fill:'none',stroke:'#D62839','stroke-width':.7},g));
     el('circle',{cx:p.x,cy:p.y,r:5.6,fill:on?'#1F4A2E':'#9AA59D',stroke:'#fff','stroke-width':1.3},g);
     el('text',{x:p.x,y:p.y+2,'text-anchor':'middle','font-size':5.6,'font-weight':800,fill:'#fff'},g,id);}
-  $('mapTag').textContent=`${o.filter(id=>nsum(id).online).length} / ${o.length} nodes online`;
+  $('mapTag').textContent=`${active().filter(id=>nsum(id).online).length} / ${active().length} sensor nodes in range`;
 }
 
 /* ============================== nodes ============================== */
@@ -367,12 +378,16 @@ function renderNodes(){
   if(!o.length){box.innerHTML='<p class="muted">Waiting for the master\'s configuration…</p>';return}
   box.innerHTML=o.map(id=>{
     const n=nsum(id),h=hbOf(id),c=ncfg(id)||{},set=h?h.set:c;
+    if(c.passive){const sd=sides().filter(x=>x.a===id||x.b===id).map(x=>x.name);
+      return `<div class="node" style="border-style:dashed;background:#F7F9F6"><div class="nh"><b>${esc(c.name||id)}</b><span class="tag" style="background:var(--grey)">transmitters only</span></div>
+      <div class="meta">IR transmitters + 12 V battery for side${sd.length>1?'s':''} ${sd.join(', ')}. No controller here — if a side stays “blocked”, check this battery and the alignment.</div>
+      <div class="row"><button class="sbtn sm" onclick="editNode('${id}')">Settings</button></div></div>`}
     const beams=(h?h.beams:(c.ch||[]).map(x=>({b:x.b,en:x.en}))).map((b,i)=>b.en?`<div class="beam"><span class="side">${esc(b.b)}</span>
       <span class="lamp ${b.p?'blk':''}" title="profile"></span>profile <span class="lamp ${b.g?'blk':''}" title="gait"></span>gait
       ${(b.blkP>20||b.blkG>20)?`<span class="tag" style="background:var(--org)">blocked ${Math.max(b.blkP,b.blkG)} s</span>`:''}</div>`:'').join('')||'<div class="muted">no side watched</div>';
     const warn=[];if(h&&h.err)warn.push(h.err);if(n.online&&!n.cfgOk)warn.push('settings being sent');if(h&&h.minPulse>300&&!(h.lrn&&h.lrn.hold))warn.push('receiver hold time long');
-    return `<div class="node ${n.online?'':'off'}"><div class="nh"><b>${esc(c.name||id)}</b><span class="tag" style="background:${n.online?'var(--grn)':'var(--grey)'}">${n.online?'online':'offline'}</span></div>
-      <div class="meta">${n.age>=0?`seen ${n.age} s ago`:'never seen'} · RSSI ${n.rssi||'–'} dBm${h&&h.vbat?` · ${h.vbat} V`:''}${h?` · fw ${h.fw}`:''}</div>${beams}
+    return `<div class="node ${n.online?'':'off'}"><div class="nh"><b>${esc(c.name||id)}</b><span class="tag" style="background:${n.online?'var(--grn)':'var(--grey)'}">${n.online?'in range':'out of range'}</span></div>
+      <div class="meta">${n.age>=0?`heard ${n.age} s ago`:'never heard'}${n.rssi?` · RSSI ${n.rssi} dBm`:''}${h&&h.vbat?` · ${h.vbat} V`:''}${n.q?` · <b>${n.q} crossings waiting</b>`:''}${h?` · fw ${h.fw}`:''}</div>${beams}
       <div class="meta">${set?`${set.armed?'armed':'DISARMED'} · sound ${set.snd?'on':'muted'}${set.snooze?' (snoozed)':''} · horn ${set.aS}s`:''}${h&&h.last?` · last: ${esc(h.last)}`:''}</div>
       ${warn.length?`<div class="warnbox">${warn.map(esc).join(' · ')}</div>`:''}
       <div class="row"><button class="sbtn sm" data-to="${id}" data-c="horn:2000">Horn</button><button class="sbtn sm" data-to="${id}" data-c="stop">Stop</button>
@@ -416,11 +431,12 @@ function renderMaster(){
   if(!st){$('mInfo').textContent='No data from the master yet.';return}
   const up=Math.floor(st.up/1000);
   $('mInfo').innerHTML=`<div class="grid2">
-    <div>Link: <b>${esc(st.link)}</b></div><div>Internet RSSI: <b>${st.rssi} dBm</b></div>
+    <div>Link: <b>${esc(st.link)}</b></div><div>Hotspot: <b>${st.wifi?`connected (${st.rssi} dBm)`:'not connected — offline mode'}</b></div>
     <div>Local page: <b>http://${st.ap}</b> on Wi-Fi <b>${esc(st.apSsid)}</b></div><div>Hotspot IP: <b>${st.ip}</b></div>
     <div>Uptime: <b>${Math.floor(up/3600)}h ${Math.floor(up/60)%60}m</b></div><div>Messages: <b>${st.rx}</b>${st.drop?` (${st.drop} dropped)`:''}</div>
     <div>Flash log: <b>${Math.round(st.fsUsed/1024)} / ${Math.round(st.fsTotal/1024)} kB</b></div><div>Telegram: <b>${c.tg?`on (${c.tgOk} sent)`:'not set'}</b></div>
-    <div>Central horn: <b>${st.snd?'on':'muted'}${st.snooze?' (snoozed)':''}</b></div><div>MAC: <b>${st.mac}</b></div></div>
+    <div>${st.portable||portable()?'Master buzzer':'Central horn'}: <b>${st.snd?'on':'muted'}${st.snooze?' (snoozed)':''}</b></div><div>MAC: <b>${st.mac}</b></div>
+    ${st.hw?`<div>Board: <b>${esc(st.hw)}</b> · free memory <b>${Math.round((st.heap||0)/1024)} kB</b></div><div>${esc(st.linkInfo||'')}</div>`:''}</div>
     ${c.err?`<div class="warnbox">${esc(c.err)}</div>`:''}`;
 }
 function renderAll(){if(S.state&&S.state.farm)$('farm').textContent=S.state.farm;else if(S.cfg&&S.cfg.farm)$('farm').textContent=S.cfg.farm;
@@ -452,7 +468,7 @@ function renderLog(){
   const fn=$('fNode').value,fc=$('fCls').value,fl=$('fLab').value;
   const rows=S.events.filter(e=>(!fn||e.id===fn)&&(!fc||e.cls===fc)&&(!fl||(fl==='no'?!e.label:wrong(e)))).slice(0,300);
   if(!rows.length){$('log').innerHTML='<tr><td colspan="10" class="muted" style="padding:16px">No crossings match.</td></tr>';return}
-  $('log').innerHTML=rows.map(e=>`<tr class="${wrong(e)?'wrong':''}"><td>${esc(fmtTime(e))}</td><td><b>${esc(e.id)}</b> · ${esc(e.b)}</td>
+  $('log').innerHTML=rows.map(e=>`<tr class="${wrong(e)?'wrong':''}"><td>${esc(fmtTime(e))}${e.late?'<br><span class="muted">delivered late</span>':''}</td><td><b>${esc(e.id)}</b> · ${esc(e.b)}</td>
     <td style="color:${e.dir==='ENTERING'?'var(--amb)':e.dir==='EXITING'?'var(--blue)':'var(--muted)'};font-weight:700">${esc(String(e.dir).replace('_',' '))}</td>
     <td style="color:${CLSC[e.cls]||'#000'};font-weight:700">${CLSN[e.cls]||e.cls}${e.people>1?` ×${e.people}`:e.nilgai>1?` ×${e.nilgai}`:''}</td><td>${Math.round(e.p*100)}%</td>
     <td><span class="tag" style="background:${SEV[e.status]||'#5E6E63'}">${e.status}</span> ${esc(e.action)}${e.note?`<br><span class="muted">${esc(e.note)}</span>`:''}</td>
@@ -496,7 +512,7 @@ async function loadHistory(){
   $('histInfo').textContent='Loading from Google Sheets…';
   try{const r=await (await fetch(CFGS.sheet+'?action=events&limit=1000&secret='+encodeURIComponent(CFGS.sec))).json();
     if(!r.ok){$('histInfo').textContent='Sheets: '+r.error;return}
-    r.rows.forEach(e=>addEvent(e,false));$('histInfo').textContent=`Loaded ${r.rows.length} of ${r.total} rows from Google Sheets.`;
+    r.rows.forEach(e=>addEvent(e,false));$('histInfo').textContent=r.rows.length?`Loaded ${r.rows.length} of ${r.total??r.rows.length} rows from Google Sheets.`:'Connected to Google Sheets — no crossings saved yet.';
     if(!$('sigHint').textContent.startsWith(S.events[0]?.uid||'x')&&S.events[0])renderSig(S.events[0]);
   }catch(err){$('histInfo').textContent='Could not reach Google Sheets ('+err.message+').'}}
 $('loadHist').onclick=loadHistory;
@@ -505,7 +521,9 @@ $('loadHist').onclick=loadHistory;
 let editId='';
 function editNode(id){
   const c=ncfg(id);if(!c){toast('No configuration for '+id+' yet');return}editId=id;$('dnT').textContent=`Node ${id} settings`;
-  const h=hbOf(id),chHtml=i=>{const x=c.ch[i],b=h&&h.beams[i];return `<div class="chbox"><b>Channel ${i+1}</b> <span class="muted">(${i?'pins 25 / 26':'pins 32 / 33'})</span>
+  if(c.passive||!c.ch){$('dnB').innerHTML=`<div class="row"><label>Name <input id="nName" value="${esc(c.name||'')}"></label><label>map x <input type="number" id="nX" value="${c.x}"></label><label>y <input type="number" id="nY" value="${c.y}"></label></div>
+    <div class="row"><label><input type="checkbox" id="nPas" ${c.passive?'checked':''}> transmitter-only corner (no controller)</label></div><p class="muted">Untick when you install a NodeMCU here, then flash it with NODE_ID "${id}".</p>`;dNode.showModal();return}
+  const h=hbOf(id),pins=(h&&h.pins)||['D7 / D6','D1 / D2'],chHtml=i=>{const x=c.ch[i],b=h&&h.beams[i];return `<div class="chbox"><b>Channel ${i+1}</b> <span class="muted">(pins ${esc(pins[i])})</span>
     <div class="row"><label><input type="checkbox" id="c${i}en" ${x.en?'checked':''}> watch a side</label>
     <label>side <input id="c${i}b" value="${esc(x.b)}" maxlength="2" style="width:56px"></label>
     <label>blocked level <select id="c${i}pol"><option value="-1">auto</option><option value="1">HIGH</option><option value="0">LOW</option></select></label></div>
@@ -519,17 +537,28 @@ function editNode(id){
     ${chHtml(0)}${chHtml(1)}`;
   [0,1].forEach(i=>$('c'+i+'pol').value=c.ch[i].pol);dNode.showModal();
 }
-$('dnSave').onclick=()=>{const v=i=>$(i);const ch=[0,1].map(i=>({en:+v('c'+i+'en').checked,b:v('c'+i+'b').value.toUpperCase().slice(0,2)||'--',pol:+v('c'+i+'pol').value,off:+v('c'+i+'off').value,inv:+v('c'+i+'inv').checked}));
+$('dnSave').onclick=()=>{const v=i=>$(i);
+  if($('nPas')){sendCfg({nodes:{[editId]:{name:v('nName').value,x:+v('nX').value,y:+v('nY').value,passive:+v('nPas').checked}}});dNode.close();toast('Saved');return}
+  const ch=[0,1].map(i=>({en:+v('c'+i+'en').checked,b:v('c'+i+'b').value.toUpperCase().slice(0,2)||'--',pol:+v('c'+i+'pol').value,off:+v('c'+i+'off').value,inv:+v('c'+i+'inv').checked}));
   sendCfg({nodes:{[editId]:{name:v('nName').value,x:+v('nX').value,y:+v('nY').value,armed:+v('nArm').checked,snd:+v('nSnd').checked,unc:+v('nUnc').checked,aS:+v('nAS').value,cS:+v('nCS').value,ch}}});
   dNode.close();toast('Settings sent to the master')};
 $('dnRemove').onclick=()=>{if(confirm(`Remove node ${editId} from the field? (Its history stays in the log.)`)){sendCfg({remove:editId});dNode.close()}};
 $('cfgBtn').onclick=()=>{const c=S.cfg||{},m=c.master||{};$('fFarm').value=c.farm||'';$('fOrder').value=(c.order||[]).join(',');
+  $('fPas').value=(c.order||[]).filter(isPas).join(',');$('fPort').checked=m.portable!==0;$('fAH').checked=!!m.allHorns;
   $('fCH').checked=!!m.centralHorn;$('fNH').checked=!!m.neighborHorn;$('fHS').value=m.hornS||5;$('fTG').checked=!!m.tg;$('fTH').checked=!!m.tgHuman;dField.showModal()};
 function orderInput(){return $('fOrder').value.toUpperCase().split(/[\s,]+/).filter(Boolean)}
+function pasInput(){return $('fPas').value.toUpperCase().split(/[\s,]+/).filter(Boolean)}
+function autoAssign(o,pas){const nodes={};o.forEach(id=>{nodes[id]=pas.includes(id)?{passive:1}:{passive:0,ch:[{en:0,b:'--'},{en:0,b:'--'}]}});
+  for(let i=0;i<o.length&&o.length>=2;i++){if(o.length===2&&i===1)break;const a=o[i],b=o[(i+1)%o.length],own=!pas.includes(a)?a:!pas.includes(b)?b:null;
+    if(!own)continue;const ch=nodes[own].ch,k=ch.findIndex(x=>!x.en);if(k>=0)ch[k]={en:1,b:a+b}}return nodes}
 $('fSave').onclick=()=>{const o=orderInput(),nodes={};
+  const pas=pasInput();
   o.forEach((id,i)=>{if(!ncfg(id)){const t=i/o.length;nodes[id]={name:'Corner '+id,x:Math.round(t<.25?t*400:t<.5?100:t<.75?100-(t-.5)*400:0),y:Math.round(t<.25?0:t<.5?(t-.25)*400:t<.75?100:100-(t-.75)*400)}}});
-  sendCfg({farm:$('fFarm').value,order:o,master:{centralHorn:+$('fCH').checked,neighborHorn:+$('fNH').checked,hornS:+$('fHS').value,tg:+$('fTG').checked,tgHuman:+$('fTH').checked},nodes});dField.close();toast('Field configuration sent')};
-$('fAuto').onclick=()=>{const o=orderInput(),nodes={};o.forEach((id,i)=>{nodes[id]={ch:[{en:1,b:id+o[(i+1)%o.length]},{en:0}]}});sendCfg({order:o,nodes});dField.close();toast('Each corner now watches the side to its clockwise neighbour')};
+  o.forEach(id=>{const want=pas.includes(id)?1:0;if(!!want!==isPas(id))(nodes[id]=nodes[id]||{}).passive=want});
+  sendCfg({farm:$('fFarm').value,order:o,master:{portable:+$('fPort').checked,allHorns:+$('fAH').checked,centralHorn:+$('fCH').checked,neighborHorn:+$('fNH').checked,hornS:+$('fHS').value,tg:+$('fTG').checked,tgHuman:+$('fTH').checked},nodes});dField.close();toast('Field configuration sent')};
+$('fAuto').onclick=()=>{const o=orderInput(),pas=pasInput(),nodes=autoAssign(o,pas);
+  if(sides().length&&!active().length&&!o.some(id=>!pas.includes(id))){toast('At least one corner needs a controller');return}
+  sendCfg({order:o,nodes});dField.close();toast('Every side is now watched by a sensor node at one of its ends')};
 
 /* ============================== settings dialog ============================== */
 $('setBtn').onclick=()=>{$('iUrl').value=CFGS.url;$('iKey').value=CFGS.key;$('iSheet').value=CFGS.sheet;$('iSec').value=CFGS.sec;dSet.showModal()};
@@ -662,22 +691,23 @@ function pickScenario(){let r=Math.random(),acc=0;for(const sc of SCEN){acc+=sc[
 let demoTimer=null,demoHornT=null,demoEv=0;
 const DEMO={state:null};
 function demoInit(){
-  const ids=['A','B','C','D'],pos=[[0,0],[100,0],[100,100],[0,100]];
-  S.cfg={farm:'IoT Lab, CSE Department, IIT (BHU) — demo',order:ids,master:{armed:1,snd:1,centralHorn:1,hornS:5,neighborHorn:1,tg:1,tgHuman:0},nodes:{}};
-  ids.forEach((id,i)=>S.cfg.nodes[id]={name:'Corner '+id,x:pos[i][0],y:pos[i][1],v:1,armed:1,snd:1,aS:5,cS:2,unc:0,ch:[{en:1,b:id+ids[(i+1)%4],pol:-1,off:40,inv:0},{en:0,b:'--',pol:-1,off:40,inv:0}]});
-  S.nodes={};ids.forEach(id=>demoHb(id));
-  S.state={farm:S.cfg.farm,up:0,time:Date.now()/1000,ip:'demo',ap:'192.168.4.1',apSsid:'NilGaiGuard-Master',wifi:true,rssi:-52,heap:120000,link:'Bluetooth LE (demo)',rx:0,drop:0,mac:'demo',armed:1,snd:1,snooze:0,horn:false,
+  const ids=['A','B','C','D'],pos=[[0,0],[100,0],[100,100],[0,100]],sides={A:['AB','DA'],C:['BC','CD']};
+  S.cfg={farm:'IoT Lab, CSE Department, IIT (BHU) — demo',order:ids,master:{armed:1,snd:1,centralHorn:1,hornS:5,neighborHorn:0,allHorns:0,portable:1,tg:1,tgHuman:0},nodes:{}};
+  ids.forEach((id,i)=>S.cfg.nodes[id]=sides[id]?{name:'Corner '+id,x:pos[i][0],y:pos[i][1],v:1,armed:1,snd:1,aS:5,cS:2,unc:0,ch:sides[id].map(b=>({en:1,b,pol:-1,off:40,inv:0}))}
+    :{name:'Corner '+id+' (transmitters)',x:pos[i][0],y:pos[i][1],passive:1});
+  S.nodes={};ids.forEach(id=>{if(!S.cfg.nodes[id].passive)demoHb(id)});
+  S.state={farm:S.cfg.farm,up:0,time:Date.now()/1000,ip:'192.168.43.20',ap:'192.168.4.1',apSsid:'NilGaiGuard-Master',wifi:true,rssi:-52,heap:31000,hw:'esp8266',portable:1,link:'ESP-NOW (demo)',linkInfo:'ESP-NOW on channel 6, master MAC 5E:4E:47:4D:53:01',rx:0,drop:0,mac:'demo',armed:1,snd:1,snooze:0,horn:false,
     today:{},cloud:{sheets:true,ok:0,fail:0,pending:0,tg:true,tgOk:0,ts:false,err:''},fsUsed:40960,fsTotal:1966080,nodes:{}};
   demoSum();S.lastState=Date.now();
 }
 function demoHb(id,beamsOverride){const c=S.cfg.nodes[id],old=S.nodes[id]&&S.nodes[id].hb;
   const beams=c.ch.map((x,i)=>Object.assign({b:x.b,en:x.en,p:0,g:0,rawP:0,rawG:0,lvlP:1,lvlG:1,blkP:0,blkG:0},beamsOverride&&beamsOverride[i]||{}));
-  S.nodes[id]={id,rssi:-55-Math.round(Math.random()*20),hb:{t:'hb',id,fw:'2.0.0',up:Date.now(),set:{v:c.v,armed:c.armed,snd:c.snd,aS:c.aS,cS:c.cS,unc:c.unc,snooze:0,ch:c.ch},beams,horn:old?old.horn:0,
+  S.nodes[id]={id,hb:{t:'hb',id,fw:'2.1.0-8266',hw:'esp8266',pins:['D7 / D6','D1 / D2'],q:0,up:Date.now(),set:{v:c.v,armed:c.armed,snd:c.snd,aS:c.aS,cS:c.cS,unc:c.unc,snooze:0,ch:c.ch},beams,horn:old?old.horn:0,
     vbat:12.4,lrn:{hold:0},minPulse:60,last:old?old.last:'',err:''}}}
-function demoSum(){S.state.nodes={};S.cfg.order.forEach(id=>{S.state.nodes[id]={online:true,age:Math.round(Math.random()*9),rssi:S.nodes[id]?S.nodes[id].rssi:-60,ev:0,cfgOk:true}});S.state.up+=1000;S.state.time=Date.now()/1000;S.lastState=Date.now()}
+function demoSum(){S.state.nodes={};S.cfg.order.forEach(id=>{S.state.nodes[id]=isPas(id)?{passive:1}:{online:true,age:Math.round(Math.random()*9),rssi:0,ev:0,q:0,cfgOk:true}});S.state.up+=1000;S.state.time=Date.now()/1000;S.lastState=Date.now()}
 function demoHorn(ms){if(!S.cfg.master.snd||!S.cfg.master.armed)return;S.state.horn=true;clearTimeout(demoHornT);demoHornT=setTimeout(()=>{S.state.horn=false;drawMap()},ms)}
 function demoRun(){
-  const sc=pickScenario(),o=S.cfg.order,watched=[];o.forEach(id=>S.cfg.nodes[id].ch.forEach((x,i)=>{if(x.en)watched.push({id,ch:i,b:x.b})}));
+  const sc=pickScenario(),o=S.cfg.order,watched=[];o.forEach(id=>(S.cfg.nodes[id].ch||[]).forEach((x,i)=>{if(x.en)watched.push({id,ch:i,b:x.b})}));
   if(!watched.length){demoTimer=setTimeout(demoRun,5000);return}
   const w=watched[Math.floor(Math.random()*watched.length)],{P,G}=sc[2](),edges=[];
   P.forEach(([a,b])=>edges.push([a,'p',1],[b,'p',0]));G.forEach(([a,b])=>edges.push([a,'g',1],[b,'g',0]));edges.sort((x,y)=>x[0]-y[0]);
@@ -688,7 +718,7 @@ function demoRun(){
     const e=Object.assign(r,{t:'ev',id:w.id,uid:`${w.id}-1-${demoEv}`,ch:w.ch,b:w.b,epoch:Math.round(now),rx:Math.round(now),time:new Date().toLocaleString('sv-SE').slice(0,19),
       node_name:c.name,rawP:P,rawG:G,dt:r.dt,dtE:r.dtE,dtM:r.dtM||0,scenario:sc[0],label:''});
     delete e._f;S.nodes[w.id].hb.last=`${w.b} ${e.cls} ${e.dir} ${Math.round(e.p*100)}%`;
-    if(e.cls==='NILGAI'&&e.status==='ALERT'){S.nodes[w.id].hb.horn=1;setTimeout(()=>{S.nodes[w.id].hb.horn=0},c.aS*1000);if(S.cfg.master.centralHorn)demoHorn(S.cfg.master.hornS*1000)}
+    if(e.cls==='NILGAI'&&e.status==='ALERT'){S.nodes[w.id].hb.horn=1;setTimeout(()=>{S.nodes[w.id].hb.horn=0},c.aS*1000);if(S.cfg.master.centralHorn)demoHorn(Math.min(8000,S.cfg.master.hornS*1000))}
     if(e.status==='CLEARED'){S.state.horn=false}
     addEvent(e,true);toast('Demo: '+sc[0]+' at side '+w.b);renderNodes();drawMap();
   },end+900);
@@ -703,14 +733,16 @@ function jsAct(e){e.status='INFO';e.action='Logged';
 function demoCmd(to,c){const ids=to==='all'?S.cfg.order:to==='master'?[]:[to],lc=c.toLowerCase();
   if(to==='master'||to==='all'){if(lc.startsWith('horn'))demoHorn(2000);if(lc==='stop')S.state.horn=false;if(lc==='mute')S.cfg.master.snd=0;if(lc==='unmute')S.cfg.master.snd=1;
     if(lc==='arm'||lc==='disarm')S.cfg.master.armed=S.state.armed=lc==='arm'?1:0;S.state.snd=S.cfg.master.snd}
-  ids.forEach(id=>{const n=S.cfg.nodes[id];if(!n)return;if(lc==='mute')n.snd=0;if(lc==='unmute')n.snd=1;if(lc==='arm')n.armed=1;if(lc==='disarm')n.armed=0;
+  ids.forEach(id=>{const n=S.cfg.nodes[id];if(!n||n.passive)return;if(lc==='mute')n.snd=0;if(lc==='unmute')n.snd=1;if(lc==='arm')n.armed=1;if(lc==='disarm')n.armed=0;
     if(lc.startsWith('horn')){S.nodes[id].hb.horn=1;setTimeout(()=>{S.nodes[id].hb.horn=0;drawMap()},2000)}if(lc==='stop')S.nodes[id].hb.horn=0;demoHb(id)});
   toast(`Demo: "${c}" → ${to}`);renderAll();bannerIdle()}
 function demoCfg(p){if(p.farm)S.cfg.farm=S.state.farm=p.farm;if(p.order)S.cfg.order=p.order;if(p.master)Object.assign(S.cfg.master,p.master);
   if(p.remove){delete S.cfg.nodes[p.remove];S.cfg.order=S.cfg.order.filter(x=>x!==p.remove)}
   for(const id in (p.nodes||{})){const src=p.nodes[id];let n=S.cfg.nodes[id];
+    if(src.passive===1){S.cfg.nodes[id]={name:(n&&n.name)||'Corner '+id,x:n?n.x:50,y:n?n.y:50,passive:1};delete S.nodes[id];if(!S.cfg.order.includes(id))S.cfg.order.push(id);continue}
+    if(src.passive===0&&n&&n.passive){delete n.passive;Object.assign(n,{v:1,armed:1,snd:1,aS:5,cS:2,unc:0,ch:[{en:0,b:'--',pol:-1,off:40,inv:0},{en:0,b:'--',pol:-1,off:40,inv:0}]})}
     if(!n){n=S.cfg.nodes[id]={name:'Corner '+id,x:50,y:50,v:1,armed:1,snd:1,aS:5,cS:2,unc:0,ch:[{en:1,b:id+'?',pol:-1,off:40,inv:0},{en:0,b:'--',pol:-1,off:40,inv:0}]};if(!S.cfg.order.includes(id))S.cfg.order.push(id)}
-    for(const k in src){if(k==='ch')src.ch.forEach((x,i)=>Object.assign(n.ch[i],x));else n[k]=src[k]}n.v++;demoHb(id)}
+    for(const k in src){if(k==='passive')continue;if(k==='ch')src.ch.forEach((x,i)=>Object.assign(n.ch[i],x));else n[k]=src[k]}n.v++;demoHb(id)}
   demoSum();renderAll();toast('Configuration saved (demo)')}
 function demoLabel(uid,cls){const e=S.byUid[uid];if(e&&e.label!==undefined&&(cls==='human'||cls==='nilgai')){}}
 function setDemo(on){

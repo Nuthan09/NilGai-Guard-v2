@@ -262,6 +262,7 @@ function onMsg(sub,txt){
   else if(sub==='event'){addEvent(j,true)}
   else if(sub==='label'){if(S.byUid[j.uid]){S.byUid[j.uid].label=j.label;renderLog();renderTraining()}}
   else if(sub==='ack'){toast(j.res||'done')}
+  else if(sub==='backlog'){onBacklog(j)}
 }
 function send(to,c){
   if(S.demo){demoCmd(to,c);return}
@@ -300,7 +301,7 @@ function addEvent(e,live){
   if(!e||!e.uid)return;
   const old=S.byUid[e.uid];
   if(old){if(!old.label&&e.label)old.label=e.label;return}
-  if(live&&!S.demo&&CFGS.sheet&&e.t==='ev'){S.upQ.push(e);if(!S.upT)S.upT=setTimeout(flushSheet,3000)}
+  if(live&&!S.demo&&CFGS.sheet&&e.t==='ev'&&!isLite()){S.upQ.push(e);if(!S.upT)S.upT=setTimeout(flushSheet,3000)}
   S.byUid[e.uid]=e;S.events.push(e);
   S.events.sort((a,b)=>(b.epoch||b.rx||0)-(a.epoch||a.rx||0));
   if(S.events.length>2000){const x=S.events.pop();delete S.byUid[x.uid]}
@@ -313,6 +314,20 @@ function addEvent(e,live){
 }
 // Backup path: this page also copies every live crossing to Google Sheets (the sheet ignores duplicates by uid).
 // So the data is saved even if the master cannot upload by itself.
+// LITE master: it keeps every crossing in flash and hands the not-yet-saved ones to this page,
+// which writes them to Google Sheets and confirms; nothing is lost while no page is open.
+const isLite=()=>!!(S.state&&String(S.state.fw||'').startsWith('lite'));
+function syncAsk(){if(S.demo||S.syncBusy||!isLite()||!CFGS.sheet||!CFGS.sec||!S.client||!S.client.connected||!masterOnline())return;
+  S.syncBusy=true;S.syncT=setTimeout(()=>{S.syncBusy=false},15000);S.client.publish(root()+'/cmd',JSON.stringify({sync:1}))}
+async function onBacklog(j){clearTimeout(S.syncT);
+  if(!j.rows||!j.rows.length){S.syncBusy=false;return}
+  let ok=false,err='';
+  try{const r=await fetch(CFGS.sheet,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:CFGS.sec,farm:$('farm').textContent,rows:j.rows})});
+    let o=null;try{o=await r.json()}catch(x){}ok=!o||o.ok!==false;if(!ok)err='Sheets: '+(o.error||'error')}catch(x){err='Sheets not reachable: '+x.message}
+  if(ok){S.upOk+=j.rows.length;S.upErr='';S.client.publish(root()+'/cmd',JSON.stringify({synced:j.next,n:j.rows.filter(r=>r.t==='ev').length}));S.syncT=setTimeout(()=>{S.syncBusy=false},15000)}
+  else{S.upErr=err;S.syncBusy=false;S.client.publish(root()+'/cmd',JSON.stringify({err}))}
+  renderMaster()}
+setInterval(syncAsk,8000);
 async function flushSheet(){S.upT=null;const rows=S.upQ.splice(0,20);if(!rows.length)return;
   try{const r=await fetch(CFGS.sheet,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:CFGS.sec,farm:$('farm').textContent,rows})});
     let j={};try{j=await r.json()}catch(x){}S.upOk+=rows.length;S.upErr=j.ok===false?(j.error||'error'):'';}
@@ -448,6 +463,7 @@ function renderMaster(){
     <div>${st.portable||portable()?'Master buzzer':'Central horn'}: <b>${st.snd?'on':'muted'}${st.snooze?' (snoozed)':''}</b></div><div>MAC: <b>${st.mac}</b></div>
     ${st.hw?`<div>Board: <b>${esc(st.hw)}</b> · free memory <b>${Math.round((st.heap||0)/1024)} kB</b></div><div>${esc(st.linkInfo||'')}</div>`:''}</div>
     ${c.err?`<div class="warnbox">Master upload: ${esc(c.err)}</div>`:''}
+    ${isLite()&&!CFGS.sec?`<div class="warnbox">To save the data to Google Sheets, open <b>Settings</b> and type the Sheets secret. This page then uploads everything the master has stored.</div>`:''}
     ${CFGS.sheet?`<div class="muted" style="margin-top:6px">This page copied ${S.upOk} crossing${S.upOk===1?'':'s'} to Google Sheets as a backup${S.upErr?` — last error: ${esc(S.upErr)}`:''}.</div>`:''}`;
 }
 function renderAll(){if(S.state&&S.state.farm)$('farm').textContent=S.state.farm;else if(S.cfg&&S.cfg.farm)$('farm').textContent=S.cfg.farm;

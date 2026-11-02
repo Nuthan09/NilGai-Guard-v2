@@ -384,10 +384,10 @@ function renderNodes(){
       <div class="row"><button class="sbtn sm" onclick="editNode('${id}')">Settings</button></div></div>`}
     const beams=(h?h.beams:(c.ch||[]).map(x=>({b:x.b,en:x.en}))).map((b,i)=>b.en?`<div class="beam"><span class="side">${esc(b.b)}</span>
       <span class="lamp ${b.p?'blk':''}" title="profile"></span>profile <span class="lamp ${b.g?'blk':''}" title="gait"></span>gait
-      ${(b.blkP>20||b.blkG>20)?`<span class="tag" style="background:var(--org)">blocked ${Math.max(b.blkP,b.blkG)} s</span>`:''}</div>`:'').join('')||'<div class="muted">no side watched</div>';
+      ${(b.blkP>20||b.blkG>20)?`<span class="tag" style="background:var(--org)">blocked ${Math.max(b.blkP,b.blkG)} s</span>`:''}${((b.nP||0)>40||(b.nG||0)>40)?`<span class="tag" style="background:var(--red)">flickering ${Math.max(b.nP||0,b.nG||0)}× / 10 s</span>`:''}</div>`:'').join('')||'<div class="muted">no side watched</div>';
     const warn=[];if(h&&h.err)warn.push(h.err);if(n.online&&!n.cfgOk)warn.push('settings being sent');if(h&&h.minPulse>300&&!(h.lrn&&h.lrn.hold))warn.push('receiver hold time long');
     return `<div class="node ${n.online?'':'off'}"><div class="nh"><b>${esc(c.name||id)}</b><span class="tag" style="background:${n.online?'var(--grn)':'var(--grey)'}">${n.online?'in range':'out of range'}</span></div>
-      <div class="meta">${n.age>=0?`heard ${n.age} s ago`:'never heard'}${n.rssi?` · RSSI ${n.rssi} dBm`:''}${h&&h.vbat?` · ${h.vbat} V`:''}${n.q?` · <b>${n.q} crossings waiting</b>`:''}${h?` · fw ${h.fw}`:''}</div>${beams}
+      <div class="meta">${n.age>=0&&n.age<1e7?`heard ${n.age} s ago`:'not heard yet'}${n.rssi?` · RSSI ${n.rssi} dBm`:''}${h&&h.vbat?` · ${h.vbat} V`:''}${n.q?` · <b>${n.q} crossings waiting</b>`:''}${h?` · fw ${h.fw}`:''}${h&&h.boot>1?` · restarts ${h.boot-1}${h.rst?` (last: ${esc(h.rst)})`:''}`:''}</div>${beams}
       <div class="meta">${set?`${set.armed?'armed':'DISARMED'} · sound ${set.snd?'on':'muted'}${set.snooze?' (snoozed)':''} · horn ${set.aS}s`:''}${h&&h.last?` · last: ${esc(h.last)}`:''}</div>
       ${warn.length?`<div class="warnbox">${warn.map(esc).join(' · ')}</div>`:''}
       <div class="row"><button class="sbtn sm" data-to="${id}" data-c="horn:2000">Horn</button><button class="sbtn sm" data-to="${id}" data-c="stop">Stop</button>

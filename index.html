@@ -229,7 +229,7 @@ footer{padding:18px 24px 24px;font-size:12px;color:var(--muted)}
 
 <script>
 /* ============================== settings & state ============================== */
-const DEF={url:'wss://broker.hivemq.com:8884/mqtt',key:'iitbhu-nuthan09',sheet:'',sec:''};
+const DEF={url:'wss://broker.hivemq.com:8884/mqtt',key:'iitbhu-nuthan09',sheet:'https://script.google.com/macros/s/AKfycbxxY0qgG3CBRBtMyM5nOl3F6b6prKd9cFqciivJRYkyoCNtWb1xRbJSmYm-ffbU4792/exec',sec:''};   // the secret is never stored in this public page
 const ls={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let CFGS=Object.assign({},DEF,ls.get('ng2-set',{}));
 const $=id=>document.getElementById(id);
@@ -237,7 +237,7 @@ const SEV={ALERT:'#D62839',WARNING:'#F07D1A',CHECK:'#F07D1A',SAFE:'#3E9B5F',CLEA
 const CLSC={HUMAN:'#2F78C4',NILGAI:'#E08A00',UNKNOWN:'#F07D1A',SMALL_ANIMAL:'#8A9A3A',OBSTRUCTION:'#D62839'};
 const CLSN={HUMAN:'Person',NILGAI:'NilGai',UNKNOWN:'Uncertain',SMALL_ANIMAL:'Small animal',OBSTRUCTION:'Beam obstructed'};
 const LABELS=[['human','Person'],['nilgai','NilGai'],['other_animal','Other animal'],['nothing','Nothing / false']];
-const S={state:null,lastState:0,cfg:null,nodes:{},events:[],byUid:{},demo:false,banner:0,client:null,animB:null};
+const S={upQ:[],upT:null,upOk:0,upErr:'',state:null,lastState:0,cfg:null,nodes:{},events:[],byUid:{},demo:false,banner:0,client:null,animB:null};
 const root=()=>'nilgaiguard2/'+CFGS.key;
 
 /* ============================== MQTT ============================== */
@@ -300,6 +300,7 @@ function addEvent(e,live){
   if(!e||!e.uid)return;
   const old=S.byUid[e.uid];
   if(old){if(!old.label&&e.label)old.label=e.label;return}
+  if(live&&!S.demo&&CFGS.sheet&&e.t==='ev'){S.upQ.push(e);if(!S.upT)S.upT=setTimeout(flushSheet,3000)}
   S.byUid[e.uid]=e;S.events.push(e);
   S.events.sort((a,b)=>(b.epoch||b.rx||0)-(a.epoch||a.rx||0));
   if(S.events.length>2000){const x=S.events.pop();delete S.byUid[x.uid]}
@@ -310,6 +311,13 @@ function addEvent(e,live){
   }
   if(!S.renderQueued){S.renderQueued=true;setTimeout(()=>{S.renderQueued=false;renderLog();renderTraining();renderSides();renderToday()},120)}
 }
+// Backup path: this page also copies every live crossing to Google Sheets (the sheet ignores duplicates by uid).
+// So the data is saved even if the master cannot upload by itself.
+async function flushSheet(){S.upT=null;const rows=S.upQ.splice(0,20);if(!rows.length)return;
+  try{const r=await fetch(CFGS.sheet,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:CFGS.sec,farm:$('farm').textContent,rows})});
+    let j={};try{j=await r.json()}catch(x){}S.upOk+=rows.length;S.upErr=j.ok===false?(j.error||'error'):'';}
+  catch(err){S.upQ.unshift(...rows);S.upErr=err.message}
+  if(S.upQ.length&&!S.upT)S.upT=setTimeout(flushSheet,5000);renderMaster()}
 function banner(e){
   const a=$('alert');let big='Field is quiet',sub='All watched sides are clear.',col='#3E9B5F',hot=false;
   if(e){col=SEV[e.status]||'#5E6E63';hot=e.status==='ALERT';
@@ -427,7 +435,8 @@ function renderMaster(){
   const st=S.state,on=masterOnline();
   $('dMaster').className='dot '+(on?'ok':'bad');$('tMaster').textContent=S.demo?'Demo master':on?'Master online':'Master offline';
   const c=st&&st.cloud;$('dSheet').className='dot '+(!c||!c.sheets?'warn':c.err&&!c.ok?'bad':'ok');
-  $('tSheet').textContent=!c?'Sheets —':!c.sheets?'Sheets not set':`Sheets ${c.ok} rows`+(c.pending>0?` · ${Math.round(c.pending/1024)} kB waiting`:'');
+  $('tSheet').textContent=!c?'Sheets —':!c.sheets?'Sheets not set on master':`Sheets ${c.ok} rows`+(c.pending>0?` · ${Math.round(c.pending/1024)} kB waiting`:'');
+  if(c&&c.sheets&&c.err&&!c.ok)$('tSheet').textContent='Sheets error (see Master node)';
   if(!st){$('mInfo').textContent='No data from the master yet.';return}
   const up=Math.floor(st.up/1000);
   $('mInfo').innerHTML=`<div class="grid2">
@@ -437,7 +446,8 @@ function renderMaster(){
     <div>Flash log: <b>${Math.round(st.fsUsed/1024)} / ${Math.round(st.fsTotal/1024)} kB</b></div><div>Telegram: <b>${c.tg?`on (${c.tgOk} sent)`:'not set'}</b></div>
     <div>${st.portable||portable()?'Master buzzer':'Central horn'}: <b>${st.snd?'on':'muted'}${st.snooze?' (snoozed)':''}</b></div><div>MAC: <b>${st.mac}</b></div>
     ${st.hw?`<div>Board: <b>${esc(st.hw)}</b> · free memory <b>${Math.round((st.heap||0)/1024)} kB</b></div><div>${esc(st.linkInfo||'')}</div>`:''}</div>
-    ${c.err?`<div class="warnbox">${esc(c.err)}</div>`:''}`;
+    ${c.err?`<div class="warnbox">Master upload: ${esc(c.err)}</div>`:''}
+    ${CFGS.sheet?`<div class="muted" style="margin-top:6px">This page copied ${S.upOk} crossing${S.upOk===1?'':'s'} to Google Sheets as a backup${S.upErr?` — last error: ${esc(S.upErr)}`:''}.</div>`:''}`;
 }
 function renderAll(){if(S.state&&S.state.farm)$('farm').textContent=S.state.farm;else if(S.cfg&&S.cfg.farm)$('farm').textContent=S.cfg.farm;
   renderNodes();drawMap();renderSides();renderToday();renderMaster()}
@@ -481,7 +491,7 @@ async function label(uid,cls){
   if(S.demo){demoLabel(uid,cls);toast('Label saved (demo)');return}
   let ok=false;
   if(S.client&&S.client.connected){S.client.publish(root()+'/cmd',JSON.stringify({label:{uid,cls,by:'dashboard'}}));ok=true}
-  if(CFGS.sheet){try{const now=new Date(),t=now.toISOString().replace('T',' ').slice(0,19);
+  if(CFGS.sheet){try{const t=new Date().toLocaleString('sv-SE').slice(0,19);
     await fetch(CFGS.sheet,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:CFGS.sec,rows:[{t:'label',uid,id:uid.split('-')[0],label:cls,by:'dashboard',time:t,farm:$('farm').textContent}]})});ok=true}catch(err){}}
   toast(ok?`Saved: ${uid} was ${cls.replace('_',' ')}`:'Not connected — label kept only in this page');
 }

@@ -453,6 +453,8 @@ function renderMaster(){
   const c=st&&st.cloud;$('dSheet').className='dot '+(!c||!c.sheets?'warn':c.err&&!c.ok?'bad':'ok');
   $('tSheet').textContent=!c?'Sheets —':!c.sheets?'Sheets not set on master':`Sheets ${c.ok} rows`+(c.pending>0?` · ${Math.round(c.pending/1024)} kB waiting`:'');
   if(c&&c.sheets&&c.err&&!c.ok)$('tSheet').textContent='Sheets error (see Master node)';
+  if(isLite()&&c&&c.pending>0&&(!CFGS.sec||String(c.err||'').startsWith('no dashboard'))){$('dSheet').className='dot warn';
+    $('tSheet').textContent=CFGS.sec?`Sheets: saving ${Math.round(c.pending/1024)} kB…`:'Sheets: type the secret in Settings'}
   if(!st){$('mInfo').textContent='No data from the master yet.';return}
   const up=Math.floor(st.up/1000);
   $('mInfo').innerHTML=`<div class="grid2">
